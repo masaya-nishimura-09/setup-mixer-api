@@ -1,108 +1,115 @@
 package main
 
 import (
-    "encoding/json"
-    "fmt"
-    "os"
-    "strings"
-    "net/http"
-    "github.com/gin-gonic/gin"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
 
 type SearchResult struct {
-    GenreInformation []int `json:"GenreInformation"`
-    Items []Items `json:"Items"`
-    TagInformation []int `json:"TagInformation"`
-    Carrier int `json:"carrier"`
-    Count int `json:"count"`
-    First int `json:"first"`
-    Hits int `json:"hits"`
-    Last int `json:"last"`
-    Page int `json:"page"`
-    PageCount int `json:"pageCount"`
-}
-
-type Items struct {
-    Item Item `json:"Item"`
+	GenreInformation []int  `json:"GenreInformation"`
+	Items            []Item `json:"Items"`
+	TagInformation   []int  `json:"TagInformation"`
+	Carrier          int    `json:"carrier"`
+	Count            int    `json:"count"`
+	First            int    `json:"first"`
+	Hits             int    `json:"hits"`
+	Last             int    `json:"last"`
+	Page             int    `json:"page"`
+	PageCount        int    `json:"pageCount"`
 }
 
 type Item struct {
-    Availability int `json:"availability"`
-    Catchcopy string `json:"catchcopy"`
-    ItemCaption string `json:"itemCaption"`
-    ItemCode string `json:"itemCode"`
-    ItemName string `json:"itemName"`
-    ItemPrice int `json:"itemPrice"`
-    ItemUrl string `json:"itemUrl"`
-    MediumImageUrls []ImageUrl `json:"mediumImageUrls"`
-    ReviewAverage int `json:"reviewAverage"`
-    ReviewCount int `json:"reviewCount"`
-    ShopName string `json:"shopName"`
-    ShopCode string `json:"shopCode"`
-}
-
-type ImageUrl struct {
-    ImageUrl string `json:"imageUrl"`
+	Availability    int      `json:"availability"`
+	Catchcopy       string   `json:"catchcopy"`
+	ItemCaption     string   `json:"itemCaption"`
+	ItemCode        string   `json:"itemCode"`
+	ItemName        string   `json:"itemName"`
+	ItemPrice       int      `json:"itemPrice"`
+	ItemUrl         string   `json:"itemUrl"`
+	MediumImageUrls []string `json:"mediumImageUrls"`
+	ReviewAverage   float64  `json:"reviewAverage"`
+	ReviewCount     int      `json:"reviewCount"`
+	ShopName        string   `json:"shopName"`
+	ShopCode        string   `json:"shopCode"`
 }
 
 func main() {
-    router := gin.Default()
-    router.GET("/items/all", getItems)
-    router.GET("/items", getItemsByColor)
-    router.Run("localhost:8080")
+	router := gin.Default()
+	router.GET("/items", getItems)
+	router.Run("localhost:8080")
 }
 
-func getSearchResult() ([]Items, error) {
-    data, err := os.ReadFile("test_data.json")
-    if err != nil {
-        return nil, fmt.Errorf("fail to read file: %w", err)
-    }
+func searchDesk(keywords string) ([]Item, error) {
+	err := godotenv.Load()
+	if err != nil {
+		return nil, fmt.Errorf("fail to load .env file: %w", err)
+	}
 
-    var searchResult SearchResult
-    if err := json.Unmarshal(data, &searchResult); err != nil {
-        return nil, fmt.Errorf("fail to unmarshal json: %w", err)
-    }
+	baseURL := "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601"
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("fail to parse url: %w", err)
+	}
+	values := u.Query()
+	values.Add("format", "json")
+	values.Add("sort", "-reviewAverage")
+	values.Add("carrier", "0")
+	values.Add("availability", "1")
+	values.Add("imageFlag", "1")
+	values.Add("formatVersion", "2")
+	values.Add("applicationId", os.Getenv("APPLICATION_ID"))
+	values.Add("keyword", keywords)
 
-    return searchResult.Items, nil
+	deskGenreId := [3]int{215698, 215702, 215706}
+
+	items := []Item{}
+
+	for i := 0; i < len(deskGenreId); i++ {
+		values.Set("genreId", strconv.Itoa(deskGenreId[i]))
+		u.RawQuery = values.Encode()
+
+		req, _ := http.NewRequest(http.MethodGet, u.String(), nil)
+
+		client := new(http.Client)
+		res, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("fail to access Rakuten api: %w", err)
+		}
+		defer res.Body.Close()
+
+		body, _ := io.ReadAll(res.Body)
+
+		var searchResult SearchResult
+		if err := json.Unmarshal(body, &searchResult); err != nil {
+			return nil, fmt.Errorf("fail to unmarshal json: %w", err)
+		}
+		items = append(items, searchResult.Items...)
+	}
+
+	return items, nil
 }
 
 func getItems(c *gin.Context) {
-    result, err := getSearchResult()
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-        return
-    }
-    c.IndentedJSON(http.StatusOK, result)
-}
+	keywords := c.Query("keyword")
 
-func itemMatchesColor(item Item, color string) bool {
-    return strings.Contains(item.Catchcopy, color) ||
-           strings.Contains(item.ItemCaption, color) ||
-           strings.Contains(item.ItemName, color)
-}
+	result, err := searchDesk(keywords)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
-func getItemsByColor(c *gin.Context) {
-    result, err := getSearchResult()
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-        return
-    }
+	if len(result) == 0 {
+		c.IndentedJSON(http.StatusNotFound, gin.H{"message": "item not found"})
+		return
+	}
 
-    colors := c.QueryArray("color")
-    newItems := make([]Items, 0, len(result))
-
-    for _, r := range result {
-        for _, c := range colors {
-            if itemMatchesColor(r.Item, c) {
-                newItems = append(newItems, r)
-                break
-            }
-        }
-    }
-    if len(newItems) == 0 {
-        c.IndentedJSON(http.StatusNotFound, gin.H{"message": "item not found"})
-        return
-    }
-
-    c.IndentedJSON(http.StatusOK, newItems)
+	c.IndentedJSON(http.StatusOK, result)
 }
