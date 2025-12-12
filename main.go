@@ -9,9 +9,11 @@ import (
     "os"
     "strconv"
     "strings"
+    "time"
 
     "github.com/gin-gonic/gin"
     "github.com/joho/godotenv"
+    "github.com/gin-contrib/cors"
 )
 
 type Response struct {
@@ -66,11 +68,17 @@ func main() {
     }
 
     router := gin.Default()
+    config := cors.DefaultConfig()
+    config.AllowOrigins = []string{"http://127.0.0.1:3000", "http://localhost:3000"}
+
+    router.Use(cors.New(config))
     router.GET("/items", getItems)
     router.Run("localhost:8080")
 }
 
 func searchItems(genreId int, keywords string) []Item {
+    time.Sleep(200 * time.Millisecond)
+
     baseURL := "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601"
     u, err := url.Parse(baseURL)
     if err != nil {
@@ -78,6 +86,7 @@ func searchItems(genreId int, keywords string) []Item {
         return []Item{}
     }
     values := u.Query()
+    values.Add("keyword", keywords)
     values.Add("format", "json")
     values.Add("sort", "-reviewAverage")
     values.Add("carrier", "0")
@@ -85,7 +94,6 @@ func searchItems(genreId int, keywords string) []Item {
     values.Add("imageFlag", "1")
     values.Add("formatVersion", "2")
     values.Add("applicationId", os.Getenv("APPLICATION_ID"))
-    values.Add("keyword", keywords)
     values.Set("genreId", strconv.Itoa(genreId))
     u.RawQuery = values.Encode()
 
