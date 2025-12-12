@@ -109,7 +109,10 @@ func searchItems(genreId int, keywords string) []Item {
     }
     defer res.Body.Close()
 
-    body, _ := io.ReadAll(res.Body)
+    body, err := io.ReadAll(res.Body)
+    if err != nil {
+        fmt.Println(err)
+    }
 
     var searchResult SearchResult
     if err := json.Unmarshal(body, &searchResult); err != nil {
